@@ -351,11 +351,23 @@ def tg_api(token, method, payload=None):
         return {"ok": False, "description": e.read().decode("utf-8", "replace")}
 
 
-def tg_send(token, chat_id, text):
-    res = tg_api(token, "sendMessage", {
+KEYBOARD = {
+    "keyboard": [
+        [{"text": "📖 /1 — на сегодня"}, {"text": "📚 /2 — на завтра"}],
+    ],
+    "resize_keyboard": True,
+    "is_persistent": True,
+}
+
+
+def tg_send(token, chat_id, text, keyboard=False):
+    payload = {
         "chat_id": chat_id, "text": text,
         "disable_web_page_preview": True,
-    })
+    }
+    if keyboard:
+        payload["reply_markup"] = KEYBOARD
+    res = tg_api(token, "sendMessage", payload)
     return res.get("ok", False), res.get("description", "")
 
 
@@ -407,25 +419,43 @@ def poll_commands(token, chat_id, once=False):
                 continue
             low = text.lower().split("@")[0]
             today = today_msk()
-            if low.startswith("/start") or low.startswith("/help"):
-                reply = ("Привет! Я бот расписания ВПТ (корпус №2, группа РКЛ-3).\n\n"
-                         "/today — расписание на сегодня\n"
-                         "/tomorrow — расписание на завтра\n"
+            tomorrow = today + dt.timedelta(days=1)
+            if low.startswith("/start"):
+                pairs, _, _ = get_day_schedule(today)
+                reply = ("Привет! Я бот расписания ВПТ (корпус №2, группа РКЛ-3).\n"
+                         "Кнопки внизу: /1 — на сегодня, /2 — на завтра.\n"
+                         "Ещё команды: /week — неделя, /help.\n"
+                         "Вечером (после 10:00) слежу за публикацией расписания на завтра "
+                         "и присылаю сразу, как оно появится.\n\n"
+                         "─── Твоё расписание на сегодня ───\n\n"
+                         + format_day_message(today, pairs))
+                ok, err = tg_send(token, chat, reply, keyboard=True)
+                if not ok:
+                    print("send error:", err)
+                continue
+            if low.startswith("/help"):
+                reply = ("Команды бота:\n"
+                         "/1 или /today — расписание на сегодня\n"
+                         "/2 или /tomorrow — расписание на завтра\n"
                          "/week — расписание на неделю\n"
-                         "Ежедневная отправка — в 20:00 по Москве.")
-            elif low.startswith("/today"):
+                         "Ежедневная отправка — в 20:00 по Москве (или сразу после публикации).")
+                ok, err = tg_send(token, chat, reply, keyboard=True)
+                if not ok:
+                    print("send error:", err)
+                continue
+            if low.startswith("/1") or low.startswith("/today"):
                 pairs, _, _ = get_day_schedule(today)
                 reply = format_day_message(today, pairs)
-            elif low.startswith("/tomorrow"):
-                pairs, _, _ = get_day_schedule(today + dt.timedelta(days=1))
-                reply = format_day_message(today + dt.timedelta(days=1), pairs)
+            elif low.startswith("/2") or low.startswith("/tomorrow"):
+                pairs, _, _ = get_day_schedule(tomorrow)
+                reply = format_day_message(tomorrow, pairs)
             elif low.startswith("/week"):
                 reply = format_week_message()
             elif low.startswith("/chatid"):
                 reply = f"Ваш chat_id: {chat}"
             else:
-                reply = "Не понял команду. Доступны: /today, /tomorrow, /week"
-            ok, err = tg_send(token, chat, reply)
+                reply = "Не понял команду. Кнопки: /1 — сегодня, /2 — завтра. Ещё: /week"
+            ok, err = tg_send(token, chat, reply, keyboard=True)
             if not ok:
                 print("send error:", err)
         # подтверждаем обработанные обновления на сервере Telegram
@@ -437,13 +467,13 @@ def poll_commands(token, chat_id, once=False):
 
 # ──────────────────────────── Отправка с защитой от дублей ────────────────────────────
 
-def send_daily(token, chat_id, target="tomorrow", force=False):
+def send_daily(token, chat_id, target="tomorrow", force=False, only_published=False):
     today = today_msk()
     date = today if target == "today" else today + dt.timedelta(days=1)
     pairs, fname, err = get_day_schedule(date)
-    if pairs is None and err is None and fname is None:
-        # файла нет — отправляем уведомление об отсутствии, но не чаще раза в день
-        pass
+    if only_published and pairs is None:
+        print(f"Файл на {date.isoformat()} ещё не опубликован — ожидание (режим watch).")
+        return True
     text = format_day_message(date, pairs)
     h = msg_hash(text)
     st = load_state()
@@ -496,8 +526,9 @@ def main():
     elif cmd == "send":
         token = os.environ.get("TG_TOKEN", "")
         chat_id = os.environ.get("TG_CHAT_ID", "")
-        target = args[1] if len(args) > 1 else "tomorrow"
+        target = next((a for a in args[1:] if not a.startswith("--")), "tomorrow")
         force = "--force" in args
+        only_published = "--only-published" in args
         if not token:
             print("Нужен TG_TOKEN (токен бота из BotFather)"); sys.exit(1)
         if not chat_id:
@@ -508,7 +539,7 @@ def main():
                 sys.exit(1)
             chat_id = str(found)
             print(f"chat_id определён автоматически: {chat_id} ({name})")
-        ok = send_daily(token, chat_id, target, force=force)
+        ok = send_daily(token, chat_id, target, force=force, only_published=only_published)
         sys.exit(0 if ok else 1)
     elif cmd == "poll":
         token = os.environ.get("TG_TOKEN", "")
