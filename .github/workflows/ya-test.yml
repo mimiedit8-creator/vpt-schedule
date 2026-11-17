@@ -1,0 +1,20 @@
+name: ya-test
+on: workflow_dispatch
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Проверка API Яндекс Музыки
+        run: |
+          echo "=== 1. api.music.yandex.net /playlist/lk..."
+          curl -s -m 30 -w "\n[%{http_code}]\n" \
+            -A "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/131.0.0.0" \
+            -H "x-yandex-music-without-invocation-info: 1" \
+            "https://api.music.yandex.net/playlist/lk.3847e4c5-10ba-478d-996d-5bf9542417f4?richTracks=false" | head -c 400
+          echo
+          echo "=== 2. music.yandex.ru handlers/playlist.jsx"
+          curl -s -m 30 -w "\n[%{http_code}]\n" \
+            -A "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/131.0.0.0" \
+            -H "X-Requested-With: XMLHttpRequest" \
+            -H "Referer: https://music.yandex.ru/playlists/lk.3847e4c5-10ba-478d-996d-5bf9542417f4" \
+            "https://music.yandex.ru/handlers/playlist.jsx?owner=lk.3847e4c5-10ba-478d-996d-5bf9542417f4&kinds=3&light=true&lang=ru" | head -c 400
