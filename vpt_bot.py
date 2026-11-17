@@ -1214,6 +1214,13 @@ def main():
             print(f"{i}. {_music_label(t)}")
         print(f"показано {len(sel)} треков (пул без повторов: "
               f"{len(cache['tracks']) - len(st['music_shown'])})")
+    elif cmd == "musictest":
+        token = os.environ.get("TG_TOKEN", "")
+        chat_id = os.environ.get("TG_CHAT_ID", "")
+        if not token or not chat_id:
+            print("Нужны TG_TOKEN и TG_CHAT_ID"); sys.exit(1)
+        send_music_selection(token, chat_id)
+        print("Тестовая подборка музыки отправлена.")
     elif cmd == "poll":
         token = os.environ.get("TG_TOKEN", "")
         if not token:

@@ -117,7 +117,9 @@ jobs:
           TG_TOKEN: ${{ secrets.TG_TOKEN }}
           TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
           TG_PASSWORD: ${{ secrets.TG_PASSWORD }}
-        run: python3 vpt_bot.py send tomorrow --force
+        run: |
+          python3 vpt_bot.py musictest
+          python3 vpt_bot.py send tomorrow --force
 
   poll:
     if: github.event_name == 'schedule' && github.event.schedule == '10 * * * *' || (github.event_name == 'workflow_dispatch' && inputs.job == 'poll')
