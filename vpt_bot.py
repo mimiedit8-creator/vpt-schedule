@@ -25,6 +25,7 @@ import datetime as dt
 import hashlib
 import json
 import os
+import random
 import re
 import sys
 import time
@@ -536,14 +537,19 @@ def handle_track_number(token, chat, number, keyboard=True):
     st = load_state()
     tracks = st.setdefault("tracks", {})
     lst = tracks.get(str(chat), [])
-    if number not in lst:
+    known = number in lst
+    if not known:
         lst.append(number)
         tracks[str(chat)] = lst
     st.setdefault("track_status", {})[number] = msg_hash(
         format_track_message(number, found, status, events))
     save_state(st)
-    text = format_track_message(number, found, status, events)
-    text += "\n\n🔔 Слежу за этой посылкой — сообщу, когда она сдвинется (проверка каждые 5 часов)."
+    text = ("🔁 Эта посылка уже у меня в памяти — отслеживаю её.\n\n" if known else
+            "🆕 Новая посылка — запомнил её.\n\n")
+    text += format_track_message(number, found, status, events)
+    if not known:
+        text += ("\n\n🔔 Слежу за этой посылкой — сообщу, когда она сдвинется "
+                 "(проверка каждые 5 часов).")
     tg_send(token, chat, text, keyboard=keyboard)
 
 
@@ -592,11 +598,160 @@ KEYBOARD = {
     "keyboard": [
         [{"text": "📖 /1 — на сегодня"}, {"text": "📚 /2 — на завтра"}],
         [{"text": "📦 /3 — посылка"}, {"text": "🗓 /4 — прошлая неделя"}],
-        [{"text": "📝 /5 — задания"}],
+        [{"text": "📝 /5 — задания"}, {"text": "🎧 /77 — музыка"}],
     ],
     "resize_keyboard": True,
     "is_persistent": True,
 }
+
+
+# ──────────────────────────── Музыка: плейлист «Мне нравится» Яндекс Музыки ────────────────────────────
+
+# Публичная ссылка на плейлист (видна всем, кто её знает).
+YA_PLAYLIST_URL = "https://music.yandex.ru/playlists/lk.3847e4c5-10ba-478d-996d-5bf9542417f4"
+MUSIC_CACHE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "music_cache.json")
+MUSIC_BATCH = 20               # размер случайной подборки
+
+
+def load_music_cache():
+    try:
+        with open(MUSIC_CACHE_FILE, encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return None
+
+
+def music_cache_info():
+    """Короткая справка о кеше плейлиста для кнопки «Обновить»."""
+    cache = load_music_cache() or {}
+    fetched = cache.get("fetched_at", 0)
+    when = (dt.datetime.fromtimestamp(fetched, MSK).strftime("%d.%m.%Y %H:%M")
+            if fetched else "неизвестно")
+    return (f"ℹ️ Список треков сохранён в кеше репозитория "
+            f"({cache.get('count', 0)} треков, собран {when}).\n"
+            "Яндекс Музыка не отдаёт API зарубежным серверам GitHub "
+            "(ошибка 451 — лицензионное ограничение), поэтому автосинхронизация "
+            "выключена: чтобы подтянуть свежие лайки, попроси ассистента "
+            "пересобрать кеш.")
+
+
+def _music_label(t):
+    return f"{t['a']} — {t['t']}" if t["a"] else t["t"]
+
+
+def pick_music(st, tracks, mode="random", n=MUSIC_BATCH):
+    """Подборка треков: random — случайные, next — по порядку плейлиста.
+
+    Уже показанные треки исключаются, пока не останется меньше n —
+    тогда список «прослушанных» сбрасывается.
+    """
+    shown = set(st.get("music_shown", []))
+    pool = [t for t in tracks if t["k"] not in shown]
+    if len(pool) < n:
+        shown = set()
+        pool = list(tracks)
+    if mode == "next":
+        sel = pool[:n]
+    else:
+        sel = random.sample(pool, n) if len(pool) > n else list(pool)
+    shown |= {t["k"] for t in sel}
+    st["music_shown"] = sorted(shown)[:4000]
+    return sel
+
+
+def music_inline_keyboard(sel):
+    rows = []
+    for i, t in enumerate(sel, 1):
+        label = f"▶️ {i}. {_music_label(t)}"
+        if len(label) > 64:
+            label = label[:63] + "…"
+        rows.append([{"text": label,
+                      "url": f"https://music.yandex.ru/album/{t['ab']}/track/{t['id']}"}])
+    rows.append([{"text": "🎲 Новые 20 песен", "callback_data": "music:new"},
+                 {"text": "🎵 Следующая подборка", "callback_data": "music:next"}])
+    rows.append([{"text": "🔄 Обновить плейлист", "callback_data": "music:refresh"},
+                 {"text": "🎧 Открыть плейлист", "url": YA_PLAYLIST_URL}])
+    return {"inline_keyboard": rows}
+
+
+def format_music_message(sel, cache, note=None):
+    fetched = cache.get("fetched_at", 0)
+    when = (dt.datetime.fromtimestamp(fetched, MSK).strftime("%d.%m в %H:%M")
+            if fetched else "?")
+    lines = ["🎧 МОЯ МУЗЫКА",
+             f"🎲 Случайная подборка — {len(sel)} треков",
+             "━━━━━━━━━━━━━━"]
+    for i, t in enumerate(sel, 1):
+        lines.append(f"{i}. {_music_label(t)}")
+    lines += ["━━━━━━━━━━━━━━", "",
+              "▶️ Тапни по кнопке трека ниже — откроется в Яндекс Музыке"]
+    if note:
+        lines.append(note)
+    lines.append(f"В плейлисте: {cache.get('count', len(cache.get('tracks', [])))} "
+                 f"треков · обновлено {when}")
+    return "\n".join(lines)
+
+
+def send_music_selection(token, chat, mode="random", edit=None, note=None):
+    """Отправляет (или редактирует) сообщение с подборкой треков."""
+    cache = load_music_cache()
+    if not cache or not cache.get("tracks"):
+        text = ("⚠️ Кеш плейлиста Яндекс Музыки не найден.\n"
+                "Попроси ассистента пересобрать music_cache.json.")
+        if edit:
+            tg_api(token, "editMessageText", {"chat_id": chat, "message_id": edit, "text": text})
+        else:
+            tg_send(token, chat, text, keyboard=True)
+        return
+    st = load_state()
+    sel = pick_music(st, cache["tracks"], mode)
+    save_state(st)
+    text = format_music_message(sel, cache, note=note)
+    kb = music_inline_keyboard(sel)
+    if edit:
+        tg_api(token, "editMessageText", {"chat_id": chat, "message_id": edit, "text": text,
+                                          "reply_markup": kb,
+                                          "disable_web_page_preview": True})
+    else:
+        tg_api(token, "sendMessage", {"chat_id": chat, "text": text, "reply_markup": kb,
+                                     "disable_web_page_preview": True})
+
+
+def handle_callback_query(token, cq):
+    """Обработка нажатий на кнопки под сообщениями (музыка, посылки)."""
+    data = cq.get("data", "")
+    cq_msg = cq.get("message") or {}
+    chat = cq_msg.get("chat", {}).get("id")
+    mid = cq_msg.get("message_id")
+
+    def answer(text=""):
+        tg_api(token, "answerCallbackQuery", {"callback_query_id": cq["id"], "text": text})
+
+    if not chat:
+        answer()
+        return
+    if data == "music:new":
+        answer("🎲 Собираю новую подборку…")
+        send_music_selection(token, chat, mode="random", edit=mid)
+    elif data == "music:next":
+        answer("🎵 Следующая подборка…")
+        send_music_selection(token, chat, mode="next", edit=mid)
+    elif data == "music:refresh":
+        answer("ℹ️ Показываю информацию о плейлисте")
+        send_music_selection(token, chat, mode="random", edit=mid,
+                             note=music_cache_info())
+    elif data == "track:new":
+        answer()
+        st = load_state()
+        st.setdefault("pending_track", {})[str(chat)] = True
+        save_state(st)
+        tg_send(token, chat, "📦 Отправь трек-номер новой посылки Яндекс Доставки "
+                             "(например, LO-835645864)", keyboard=True)
+    elif data.startswith("track:"):
+        answer("📦 Проверяю посылку…")
+        handle_track_number(token, chat, data[6:])
+    else:
+        answer()
 
 
 # ──────────────────────────── Домашние задания (/задание, /5) ────────────────────────────
@@ -735,11 +890,12 @@ def resolve_chat_id(token):
 TRACK_RE_FMT = re.compile(r"[A-Za-z0-9-]{6,40}")
 
 COMMAND_WORDS = {
-    "посылк": "/3", "посыл": "/3", "пакет": "/3", "трек": "/3",
+    "посылк": "/3", "посыл": "/3", "пакет": "/3", "трек-номер": "/3",
     "сегодня": "/1", "завтра": "/2",
     "прошл": "/4",
     "неделю": "/week", "неделя": "/week",
     "задания": "/5", "задание": "/5",
+    "музык": "/77", "плейлист": "/77", "песн": "/77",
     "старт": "/start", "привет": "/start", "начать": "/start",
     "помощь": "/help", "help": "/help",
 }
@@ -797,6 +953,10 @@ def poll_commands(token, chat_id, once=False, max_seconds=None):
         max_update_id = 0
         for upd in updates:
             max_update_id = max(max_update_id, upd["update_id"])
+            cq = upd.get("callback_query")
+            if cq:
+                handle_callback_query(token, cq)
+                continue
             msg = upd.get("message") or upd.get("edited_message") or {}
             text = (msg.get("text") or msg.get("caption") or "").strip()
             chat = msg.get("chat", {}).get("id")
@@ -836,12 +996,13 @@ def poll_commands(token, chat_id, once=False, max_seconds=None):
                          "сохранённые данные.\n\n")
                 reply += ("Привет! Я бот-помощник ВПТ (корпус №2, группа РКЛ-3).\n"
                           "Кнопки внизу: /1 — на сегодня, /2 — на завтра, /3 — посылка, "
-                          "/4 — прошлая неделя, /5 — задания.\n"
+                          "/4 — прошлая неделя, /5 — задания, /77 — музыка.\n"
                           "Домашку записывай так: /задание история выучить §5 "
                           "(или пришли фото с подписью /задание).\n"
                           "Вечером (после 13:00) слежу за публикацией расписания на завтра "
                           "и присылаю сразу, как оно появится.\n"
-                          "За посылками Яндекс Доставки слежу каждые 5 часов.\n\n"
+                          "За посылками Яндекс Доставки слежу каждые 5 часов.\n"
+                          "🎧 /77 — случайные 20 треков из твоей Яндекс Музыки.\n\n"
                           "─── Твоё расписание на сегодня ───\n\n"
                           + format_day_message(today, pairs))
                 ok, err = tg_send(token, chat, reply, keyboard=True)
@@ -858,6 +1019,7 @@ def poll_commands(token, chat_id, once=False, max_seconds=None):
                          "/задание <предмет> <текст> — записать задание "
                          "(предмет можно не указывать)\n"
                          "/задание удалить <номер> — удалить задание\n"
+                         "/77 или /музыка — случайные 20 треков из Яндекс Музыки\n"
                          "/week — расписание на текущую неделю\n"
                          "Расписание на завтра приходит в 20:00 (или сразу после публикации).\n"
                          "Посылки проверяются каждые 5 часов, при движении приходит уведомление.")
@@ -870,10 +1032,24 @@ def poll_commands(token, chat_id, once=False, max_seconds=None):
                 if arg:
                     handle_track_number(token, chat, arg)
                 else:
-                    st.setdefault("pending_track", {})[str(chat)] = True
-                    save_state(st)
-                    tg_send(token, chat, "📦 Отправь мне трек-номер посылки Яндекс Доставки "
-                                         "(например, LO-835645864)", keyboard=True)
+                    saved = st.get("tracks", {}).get(str(chat), [])
+                    if saved:
+                        # память: предлагаем отследить сохранённые посылки или новую
+                        rows = [[{"text": f"📦 {num}", "callback_data": f"track:{num}"}]
+                                for num in saved[-6:]]
+                        rows.append([{"text": "🆕 Новая посылка", "callback_data": "track:new"}])
+                        tg_api(token, "sendMessage", {
+                            "chat_id": chat,
+                            "text": "📦 Какие посылки отслеживаем?",
+                            "reply_markup": {"inline_keyboard": rows}})
+                    else:
+                        st.setdefault("pending_track", {})[str(chat)] = True
+                        save_state(st)
+                        tg_send(token, chat, "📦 Отправь мне трек-номер посылки Яндекс Доставки "
+                                             "(например, LO-835645864)", keyboard=True)
+                continue
+            if low.startswith("/77") or low.startswith("/музык") or low.startswith("/music"):
+                send_music_selection(token, chat)
                 continue
             if low.startswith("/5") or low.startswith("/задан"):
                 # сохранить можно только через /задание; /5 и слова — показать список
@@ -935,7 +1111,8 @@ def poll_commands(token, chat_id, once=False, max_seconds=None):
                 reply = f"Ваш chat_id: {chat}"
             else:
                 reply = ("Не понял команду. Кнопки: /1 — сегодня, /2 — завтра, "
-                         "/3 — посылка, /4 — прошлая неделя. Ещё: /week")
+                         "/3 — посылка, /4 — прошлая неделя, /5 — задания, /77 — музыка. "
+                         "Ещё: /week")
             print(f"[скорость] команда {low[:12]!r} подготовлена за {time.time() - t_cmd:.2f}с")
             ok, err = tg_send(token, chat, reply, keyboard=True)
             if not ok:
@@ -1027,6 +1204,16 @@ def main():
         sys.exit(0 if ok else 1)
     elif cmd == "track":
         track_check_job()
+    elif cmd == "music":
+        cache = load_music_cache()
+        if not cache or not cache.get("tracks"):
+            print("кеш музыки не найден (music_cache.json)"); sys.exit(1)
+        st = {}
+        sel = pick_music(st, cache["tracks"], "random")
+        for i, t in enumerate(sel, 1):
+            print(f"{i}. {_music_label(t)}")
+        print(f"показано {len(sel)} треков (пул без повторов: "
+              f"{len(cache['tracks']) - len(st['music_shown'])})")
     elif cmd == "poll":
         token = os.environ.get("TG_TOKEN", "")
         if not token:
