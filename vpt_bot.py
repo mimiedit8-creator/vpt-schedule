@@ -27,6 +27,7 @@ import json
 import os
 import re
 import sys
+import time
 import urllib.parse
 import urllib.request
 import xml.etree.ElementTree as ET
@@ -322,6 +323,55 @@ def get_day_schedule_safe(date):
         return None, None, None
 
 
+# ──────────────────────────── Кеш расписания (скорость ответов) ────────────────────────────
+
+CACHE_TTL = 600  # секунд (10 минут) — живёт кеш расписания на день
+
+
+def get_day_schedule_cached(date):
+    """Расписание дня с кешем — основа быстрых ответов на /1 /2 /start.
+
+    Возвращает (pairs, fname, from_cache, stale):
+      from_cache=True — данные из кеша (мгновенно, без обращения к облаку);
+      stale=True      — облако недоступно, отданы последние сохранённые данные.
+    Кеш обновляют и фоновые задачи (watch каждые 30 минут), поэтому
+    пользовательские команды почти всегда попадают в свежий кеш.
+    """
+    st = load_state()
+    key = date.isoformat()
+    cache = st.get("schedule_cache", {}) or {}
+    c = cache.get(key)
+    now = time.time()
+    if c and now - c.get("fetched_at", 0) < CACHE_TTL and "pairs" in c:
+        return c["pairs"], c.get("fname"), True, False
+    t0 = time.time()
+    try:
+        pairs, fname, _ = get_day_schedule(date)
+    except Exception as e:
+        print(f"[кеш] источник недоступен ({e}) — отдаю сохранённые данные")
+        if c and "pairs" in c:
+            return c["pairs"], c.get("fname"), True, True
+        return None, None, False, False
+    if pairs is None:
+        # файла нет: отличаем «ещё не опубликовано» от «облако недоступно»
+        # (при сбое сети список файлов приходит пустым — как без публикации)
+        try:
+            propfind(BUILDING_DIR + "/")
+        except Exception as e:
+            print(f"[кеш] облако недоступно ({e}) — отдаю сохранённые данные")
+            if c and "pairs" in c:
+                return c["pairs"], c.get("fname"), True, True
+        print(f"[кеш] на {date} расписание пока не опубликовано ({time.time() - t0:.2f}с)")
+        return None, None, False, False  # «нет файла» не кешируем
+    # храним только ключи за последние 14 дней, чтобы state.json не рос
+    fresh = {k: v for k, v in cache.items() if now - v.get("fetched_at", 0) < 14 * 86400}
+    fresh[key] = {"fetched_at": now, "pairs": pairs, "fname": fname}
+    st["schedule_cache"] = fresh
+    save_state(st)
+    print(f"[кеш] свежие данные за {date}: {time.time() - t0:.2f}с")
+    return pairs, fname, False, False
+
+
 def format_last_week_message():
     """Расписание на прошлую неделю (понедельник–воскресенье)."""
     today = today_msk()
@@ -403,6 +453,127 @@ def msg_hash(text):
     return hashlib.sha256(text.encode("utf-8")).hexdigest()[:16]
 
 
+# ──────────────────────────── Яндекс Доставка: отслеживание ────────────────────────────
+
+TRACK_URL = "https://dostavka.yandex.ru/ndd/tracking/?order_tracking_id={}"
+BROWSER_UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+              "(KHTML, like Gecko) Chrome/126.0 Safari/537.36")
+
+
+def track_yandex_delivery(number):
+    """Отслеживание посылки Яндекс Доставки по трек-номеру.
+
+    Использует публичную страницу отслеживания (данные приходят в готовом виде).
+    Возвращает (found, status, events), events — [(дата, статус, адрес)].
+    """
+    url = TRACK_URL.format(urllib.parse.quote(number))
+    last_err = None
+    html = None
+    for attempt in range(3):
+        try:
+            req = urllib.request.Request(url, headers={"User-Agent": BROWSER_UA})
+            with urllib.request.urlopen(req, timeout=20) as r:
+                html = r.read().decode("utf-8", "replace")
+            break
+        except urllib.error.HTTPError as e:
+            if e.code == 404:          # сайт отвечает 404 на несуществующий номер
+                return False, "", []
+            last_err = e
+        except Exception as e:
+            last_err = e
+    if html is None:
+        raise last_err
+    # карточка статуса есть только у существующих заказов
+    # (слово «не найден» в коде страницы есть всегда — на него полагаться нельзя)
+    m = re.search(r'<div class="predictor-card[^"]*">(.*?)</div>', html, re.S)
+    if not m:
+        return False, "", []
+    status = re.sub(r"\s+", " ", re.sub(r"<[^>]+>", "", m.group(1))).strip()
+    events = []
+    for t, d, s in re.findall(
+            r'<div class="track-time">([^<]*)</div>\s*<div class="track-desc">([^<]*)</div>\s*'
+            r'(?:<div class="track-subtitle">([^<]*)</div>)?', html):
+        events.append((t.strip(), d.strip(), (s or "").strip()))
+    if not events:
+        return False, "", []
+    return True, status, events
+
+
+def format_track_message(number, found, status, events, changed=False):
+    lines = []
+    if changed:
+        lines += ["📦 ДВИЖЕНИЕ ПО ПОСЫЛКЕ", ""]
+    lines.append(f"📦 ПОСЫЛКА {number}")
+    if not found:
+        lines += ["", "❌ Посылка с таким номером не найдена.",
+                  "Проверьте номер: формат LO-XXXXXXXXX, без пробелов."]
+        return "\n".join(lines)
+    if status:
+        lines.append(f"📍 {status}")
+    lines += ["", "━━━━━━━━━━━━━━", "", "🕐 Последние события (сначала новые):"]
+    for t, d, s in list(reversed(events))[:8]:
+        line = f"• {t} — {d}" if t else f"• {d}"
+        if s:
+            line += f" ({s})"
+        lines.append(line)
+    return "\n".join(lines)
+
+
+def handle_track_number(token, chat, number, keyboard=True):
+    """Показ статуса посылки + сохранение номера для автопроверки."""
+    number = number.strip()
+    if not re.fullmatch(r"[A-Za-z0-9-]{6,40}", number):
+        tg_send(token, chat, "❌ Неверный формат трек-номера (6–40 символов: латиница, "
+                             "цифры, дефис). Пример: LO-835645864", keyboard=keyboard)
+        return
+    try:
+        found, status, events = track_yandex_delivery(number)
+    except Exception as e:
+        print("track error:", e)
+        tg_send(token, chat, "⚠️ Не удалось получить данные с Яндекс Доставки. "
+                             "Попробуйте ещё раз через пару минут.", keyboard=keyboard)
+        return
+    st = load_state()
+    tracks = st.setdefault("tracks", {})
+    lst = tracks.get(str(chat), [])
+    if number not in lst:
+        lst.append(number)
+        tracks[str(chat)] = lst
+    st.setdefault("track_status", {})[number] = msg_hash(
+        format_track_message(number, found, status, events))
+    save_state(st)
+    text = format_track_message(number, found, status, events)
+    text += "\n\n🔔 Слежу за этой посылкой — сообщу, когда она сдвинется (проверка каждые 5 часов)."
+    tg_send(token, chat, text, keyboard=keyboard)
+
+
+def track_check_job():
+    """Проверка всех отслеживаемых посылок; уведомление при изменении статуса."""
+    token = os.environ.get("TG_TOKEN", "")
+    st = load_state()
+    tracks = st.get("tracks", {})
+    statuses = st.get("track_status", {})
+    changed_any = False
+    for chat, numbers in tracks.items():
+        for num in numbers:
+            try:
+                found, status, events = track_yandex_delivery(num)
+            except Exception as e:
+                print(f"Ошибка трекинга {num}: {e}")
+                continue
+            text = format_track_message(num, found, status, events)
+            h = msg_hash(text)
+            prev = statuses.get(num)
+            if prev and prev != h:
+                tg_send(token, chat, format_track_message(num, found, status, events,
+                                                          changed=True))
+                changed_any = True
+            statuses[num] = h
+    st["track_status"] = statuses
+    save_state(st)
+    print("Проверка посылок завершена" + (" — были изменения!" if changed_any else "."))
+
+
 # ──────────────────────────── Telegram ────────────────────────────
 
 def tg_api(token, method, payload=None):
@@ -420,7 +591,7 @@ def tg_api(token, method, payload=None):
 KEYBOARD = {
     "keyboard": [
         [{"text": "📖 /1 — на сегодня"}, {"text": "📚 /2 — на завтра"}],
-        [{"text": "🗓 /3 — прошлая неделя"}],
+        [{"text": "📦 /3 — посылка"}, {"text": "🗓 /4 — прошлая неделя"}],
     ],
     "resize_keyboard": True,
     "is_persistent": True,
@@ -487,15 +658,43 @@ def poll_commands(token, chat_id, once=False):
             low = text.lower().split("@")[0]
             today = today_msk()
             tomorrow = today + dt.timedelta(days=1)
+            st = load_state()
+            password = os.environ.get("TG_PASSWORD", "")
+
+            # ── проверка пароля ──
+            if password and str(chat) != str(chat_id or "") \
+                    and str(chat) not in st.get("allowed_chats", []):
+                if text == password:
+                    st.setdefault("allowed_chats", []).append(str(chat))
+                    save_state(st)
+                    tg_send(token, chat, "✅ Пароль принят! Теперь можешь пользоваться ботом.",
+                            keyboard=True)
+                else:
+                    tg_send(token, chat, "🔒 Это приватный бот. Введите пароль для доступа.")
+                continue
+
+            # ── ожидание трек-номера после /3 ──
+            if st.get("pending_track", {}).get(str(chat)) and not text.startswith("/"):
+                st.setdefault("pending_track", {}).pop(str(chat), None)
+                save_state(st)
+                handle_track_number(token, chat, text)
+                continue
+
+            # ── команды ──
+            t_cmd = time.time()
             if low.startswith("/start"):
-                pairs, _, _ = get_day_schedule(today)
-                reply = ("Привет! Я бот расписания ВПТ (корпус №2, группа РКЛ-3).\n"
-                         "Кнопки внизу: /1 — на сегодня, /2 — на завтра.\n"
-                         "Ещё команды: /week — неделя, /help.\n"
-                         "Вечером (после 10:00) слежу за публикацией расписания на завтра "
-                         "и присылаю сразу, как оно появится.\n\n"
-                         "─── Твоё расписание на сегодня ───\n\n"
-                         + format_day_message(today, pairs))
+                pairs, _, _, stale = get_day_schedule_cached(today)
+                reply = ("" if not stale else
+                         "⚠️ Облако техникума временно недоступно — показываю последние "
+                         "сохранённые данные.\n\n")
+                reply += ("Привет! Я бот-помощник ВПТ (корпус №2, группа РКЛ-3).\n"
+                          "Кнопки внизу: /1 — на сегодня, /2 — на завтра, /3 — посылка, "
+                          "/4 — прошлая неделя.\n"
+                          "Вечером (после 13:00) слежу за публикацией расписания на завтра "
+                          "и присылаю сразу, как оно появится.\n"
+                          "За посылками Яндекс Доставки слежу каждые 5 часов.\n\n"
+                          "─── Твоё расписание на сегодня ───\n\n"
+                          + format_day_message(today, pairs))
                 ok, err = tg_send(token, chat, reply, keyboard=True)
                 if not ok:
                     print("send error:", err)
@@ -504,27 +703,47 @@ def poll_commands(token, chat_id, once=False):
                 reply = ("Команды бота:\n"
                          "/1 или /today — расписание на сегодня\n"
                          "/2 или /tomorrow — расписание на завтра\n"
-                         "/3 или /lastweek — расписание на прошлую неделю\n"
+                         "/3 или /посылка — отследить посылку Яндекс Доставки\n"
+                         "/4 или /lastweek — расписание на прошлую неделю\n"
                          "/week — расписание на текущую неделю\n"
-                         "Ежедневная отправка — в 20:00 по Москве (или сразу после публикации).")
+                         "Расписание на завтра приходит в 20:00 (или сразу после публикации).\n"
+                         "Посылки проверяются каждые 5 часов, при движении приходит уведомление.")
                 ok, err = tg_send(token, chat, reply, keyboard=True)
                 if not ok:
                     print("send error:", err)
                 continue
+            if low.startswith("/3") or low.startswith("/посылка"):
+                arg = text.split(maxsplit=1)[1].strip() if len(text.split(maxsplit=1)) > 1 else ""
+                if arg:
+                    handle_track_number(token, chat, arg)
+                else:
+                    st.setdefault("pending_track", {})[str(chat)] = True
+                    save_state(st)
+                    tg_send(token, chat, "📦 Отправь мне трек-номер посылки Яндекс Доставки "
+                                         "(например, LO-835645864)", keyboard=True)
+                continue
             if low.startswith("/1") or low.startswith("/today"):
-                pairs, _, _ = get_day_schedule(today)
+                pairs, _, _, stale = get_day_schedule_cached(today)
                 reply = format_day_message(today, pairs)
+                if stale:
+                    reply = ("⚠️ Облако техникума временно недоступно — последние "
+                             "сохранённые данные.\n\n" + reply)
             elif low.startswith("/2") or low.startswith("/tomorrow"):
-                pairs, _, _ = get_day_schedule(tomorrow)
+                pairs, _, _, stale = get_day_schedule_cached(tomorrow)
                 reply = format_day_message(tomorrow, pairs)
-            elif low.startswith("/3") or low.startswith("/lastweek"):
+                if stale:
+                    reply = ("⚠️ Облако техникума временно недоступно — последние "
+                             "сохранённые данные.\n\n" + reply)
+            elif low.startswith("/4") or low.startswith("/lastweek"):
                 reply = format_last_week_message()
             elif low.startswith("/week"):
                 reply = format_week_message()
             elif low.startswith("/chatid"):
                 reply = f"Ваш chat_id: {chat}"
             else:
-                reply = "Не понял команду. Кнопки: /1 — сегодня, /2 — завтра, /3 — прошлая неделя. Ещё: /week"
+                reply = ("Не понял команду. Кнопки: /1 — сегодня, /2 — завтра, "
+                         "/3 — посылка, /4 — прошлая неделя. Ещё: /week")
+            print(f"[скорость] команда {low[:12]!r} подготовлена за {time.time() - t_cmd:.2f}с")
             ok, err = tg_send(token, chat, reply, keyboard=True)
             if not ok:
                 print("send error:", err)
@@ -613,6 +832,8 @@ def main():
             print(f"chat_id определён автоматически: {chat_id} ({name})")
         ok = send_daily(token, chat_id, target, force=force, only_published=only_published)
         sys.exit(0 if ok else 1)
+    elif cmd == "track":
+        track_check_job()
     elif cmd == "poll":
         token = os.environ.get("TG_TOKEN", "")
         if not token:

@@ -4,11 +4,13 @@ on:
   schedule:
     # 20:00 по Москве (UTC+3) — гарантированная отправка расписания на завтра
     - cron: "0 17 * * *"
-    # каждый час — обработка команд /1 /2 /week (около :10)
+    # каждый час — обработка команд /1 /2 /3 /4 (около :10)
     - cron: "10 * * * *"
-    # с 10:00 до 22:35 по Москве каждые ~30 минут — проверка публикации
+    # с 13:00 до 22:35 по Москве каждые ~30 минут — проверка публикации
     # расписания на завтра; как только файл появляется (или меняется) — сразу отправка
-    - cron: "5/30 7-19 * * *"
+    - cron: "5/30 10-19 * * *"
+    # каждые 5 часов — проверка посылок Яндекс Доставки (уведомление при движении)
+    - cron: "0 */5 * * *"
   workflow_dispatch:
     inputs:
       job:
@@ -16,7 +18,7 @@ on:
         required: true
         default: "send"
         type: choice
-        options: [send, poll, watch, test]
+        options: [send, poll, watch, track, test]
 
 jobs:
   send:
@@ -27,15 +29,15 @@ jobs:
       contents: write
     steps:
       - uses: actions/checkout@v4
-
-      - uses: actions/setup-python@v5
         with:
-          python-version: "3.12"
+          fetch-depth: 1
+
 
       - name: Отправить расписание на завтра
         env:
           TG_TOKEN: ${{ secrets.TG_TOKEN }}
           TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
+          TG_PASSWORD: ${{ secrets.TG_PASSWORD }}
         run: python3 vpt_bot.py send tomorrow
 
       - name: Сохранить состояние (защита от дублей)
@@ -47,25 +49,52 @@ jobs:
           git push || true
 
   watch:
-    if: github.event_name == 'schedule' && github.event.schedule == '5/30 7-19 * * *' || (github.event_name == 'workflow_dispatch' && inputs.job == 'watch')
+    if: github.event_name == 'schedule' && github.event.schedule == '5/30 10-19 * * *' || (github.event_name == 'workflow_dispatch' && inputs.job == 'watch')
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
       contents: write
     steps:
       - uses: actions/checkout@v4
-
-      - uses: actions/setup-python@v5
         with:
-          python-version: "3.12"
+          fetch-depth: 1
+
 
       - name: Проверить публикацию расписания на завтра
         env:
           TG_TOKEN: ${{ secrets.TG_TOKEN }}
           TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
+          TG_PASSWORD: ${{ secrets.TG_PASSWORD }}
         run: python3 vpt_bot.py send tomorrow --only-published
 
       - name: Сохранить состояние (защита от дублей)
+        run: |
+          git config user.name "vpt-bot"
+          git config user.email "bot@users.noreply.github.com"
+          git add state.json || true
+          git diff --cached --quiet || git commit -m "state update [skip ci]"
+          git push || true
+
+  track:
+    if: github.event_name == 'schedule' && github.event.schedule == '0 */5 * * *' || (github.event_name == 'workflow_dispatch' && inputs.job == 'track')
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+
+      - name: Проверить посылки Яндекс Доставки
+        env:
+          TG_TOKEN: ${{ secrets.TG_TOKEN }}
+          TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
+          TG_PASSWORD: ${{ secrets.TG_PASSWORD }}
+        run: python3 vpt_bot.py track
+
+      - name: Сохранить состояние (статусы посылок)
         run: |
           git config user.name "vpt-bot"
           git config user.email "bot@users.noreply.github.com"
@@ -79,30 +108,40 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
-
-      - uses: actions/setup-python@v5
         with:
-          python-version: "3.12"
+          fetch-depth: 1
+
 
       - name: Тестовое сообщение в Telegram
         env:
           TG_TOKEN: ${{ secrets.TG_TOKEN }}
           TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
+          TG_PASSWORD: ${{ secrets.TG_PASSWORD }}
         run: python3 vpt_bot.py send tomorrow --force
 
   poll:
     if: github.event_name == 'schedule' && github.event.schedule == '10 * * * *' || (github.event_name == 'workflow_dispatch' && inputs.job == 'poll')
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v4
-
-      - uses: actions/setup-python@v5
         with:
-          python-version: "3.12"
+          fetch-depth: 1
+
 
       - name: Ответить на команды
         env:
           TG_TOKEN: ${{ secrets.TG_TOKEN }}
           TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
+          TG_PASSWORD: ${{ secrets.TG_PASSWORD }}
         run: python3 vpt_bot.py poll --once
+
+      - name: Сохранить состояние (пароли, посылки)
+        run: |
+          git config user.name "vpt-bot"
+          git config user.email "bot@users.noreply.github.com"
+          git add state.json || true
+          git diff --cached --quiet || git commit -m "state update [skip ci]"
+          git push || true
