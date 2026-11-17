@@ -16,7 +16,7 @@ on:
         required: true
         default: "send"
         type: choice
-        options: [send, poll, watch]
+        options: [send, poll, watch, test]
 
 jobs:
   send:
@@ -72,6 +72,23 @@ jobs:
           git add state.json || true
           git diff --cached --quiet || git commit -m "state update [skip ci]"
           git push || true
+
+  test:
+    if: github.event_name == 'workflow_dispatch' && inputs.job == 'test'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Тестовое сообщение в Telegram
+        env:
+          TG_TOKEN: ${{ secrets.TG_TOKEN }}
+          TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
+        run: python3 vpt_bot.py send tomorrow --force
 
   poll:
     if: github.event_name == 'schedule' && github.event.schedule == '10 * * * *' || (github.event_name == 'workflow_dispatch' && inputs.job == 'poll')

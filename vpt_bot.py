@@ -82,10 +82,17 @@ def _auth_headers():
     return {"Authorization": "Basic " + tok}
 
 
-def http_get(url, timeout=90):
-    req = urllib.request.Request(url, headers=_auth_headers())
-    with urllib.request.urlopen(req, timeout=timeout) as r:
-        return r.read()
+def http_get(url, timeout=90, retries=3):
+    last_err = None
+    for attempt in range(retries):
+        try:
+            req = urllib.request.Request(url, headers=_auth_headers())
+            with urllib.request.urlopen(req, timeout=timeout) as r:
+                return r.read()
+        except Exception as e:
+            last_err = e
+            print(f"Загрузка не удалась (попытка {attempt + 1}/{retries}): {e}")
+    raise last_err
 
 
 def propfind(path=""):
@@ -104,20 +111,38 @@ def propfind(path=""):
     return out
 
 
-def list_schedule_files():
-    """Файлы папки корпуса: [(дата, имя файла)] — только корень папки, без архива."""
-    entries = propfind(BUILDING_DIR + "/")
+_FILE_CACHE = {"key": None, "files": None}
+
+
+def list_schedule_files(include_archive=True):
+    """Файлы папки корпуса (+ архив): [(дата, имя_файла, путь_к_файлу)].
+
+    Текущие файлы лежат в корне папки, старые техникум переносит в «АРХИВ».
+    """
+    key = ("arch" if include_archive else "main",)
+    if _FILE_CACHE["key"] == key and _FILE_CACHE["files"] is not None:
+        return _FILE_CACHE["files"]
+    folders = [BUILDING_DIR + "/"]
+    if include_archive:
+        folders.append(BUILDING_DIR + "/АРХИВ/")
     result = []
-    for name in entries:
-        if name.endswith("/"):
+    for folder in folders:
+        try:
+            entries = propfind(folder)
+        except Exception:
             continue
-        base = os.path.basename(name)
-        if not base.lower().endswith(".xlsx"):
-            continue
-        d = parse_date_from_name(base)
-        if d:
-            result.append((d, base))
+        for name in entries:
+            if name.endswith("/"):
+                continue
+            base = os.path.basename(name)
+            if not base.lower().endswith(".xlsx"):
+                continue
+            d = parse_date_from_name(base)
+            if d:
+                result.append((d, base, folder))
     result.sort()
+    _FILE_CACHE["key"] = key
+    _FILE_CACHE["files"] = result
     return result
 
 
@@ -136,8 +161,8 @@ def parse_date_from_name(name):
         return None
 
 
-def download_day_file(filename):
-    url = WEBDAV + urllib.parse.quote(BUILDING_DIR + "/" + filename)
+def download_day_file(filename, folder=None):
+    url = WEBDAV + urllib.parse.quote((folder or BUILDING_DIR + "/") + filename)
     return http_get(url)
 
 
@@ -232,11 +257,11 @@ def bell(pair_no, date):
 def get_day_schedule(date):
     """Расписание группы на дату. Возвращает (пары|None, имя файла|None, ошибка)."""
     files = list_schedule_files()
-    match = [f for d, f in files if d == date]
+    match = [f for f in files if f[0] == date]
     if not match:
         return None, None, None
-    fname = sorted(match)[-1]  # если несколько — берём последнее
-    data = download_day_file(fname)
+    _, fname, folder = sorted(match)[-1]  # если несколько — берём последнее
+    data = download_day_file(fname, folder)
     rows = parse_xlsx(data)
     pairs = extract_group_pairs(rows, GROUP)
     return pairs, fname, None
@@ -288,6 +313,47 @@ def format_day_message(date, pairs, changed=False):
     return "\n".join(lines)
 
 
+def get_day_schedule_safe(date):
+    """Как get_day_schedule, но при ошибке сети возвращает (None, None, None)."""
+    try:
+        return get_day_schedule(date)
+    except Exception as e:
+        print(f"Ошибка при получении {date}: {e}")
+        return None, None, None
+
+
+def format_last_week_message():
+    """Расписание на прошлую неделю (понедельник–воскресенье)."""
+    today = today_msk()
+    monday = today - dt.timedelta(days=today.weekday() + 7)
+    lines = ["🗓 РАСПИСАНИЕ НА ПРОШЛУЮ НЕДЕЛЮ",
+             f"🏫 {COLLEGE} | Корпус №{BUILDING_NO} | 👨‍🎓 {GROUP}",
+             f"📅 {monday.day} {MONTHS_RU[monday.month]} – {monday.day + 6} {MONTHS_RU[monday.month]}",
+             "━━━━━━━━━━━━━━"]
+    found_any = False
+    for i in range(7):
+        d = monday + dt.timedelta(days=i)
+        pairs, fname, _ = get_day_schedule_safe(d)
+        wd = WEEKDAYS_RU[d.weekday()]
+        lines.append("")
+        lines.append(f"📅 {d.day} {MONTHS_RU[d.month]}, {wd}")
+        if pairs is None:
+            lines.append("   ℹ️ файл расписания не найден (удалён из облака)")
+        elif not pairs:
+            lines.append("   🎉 занятий не было")
+        else:
+            found_any = True
+            for num, disc, teacher, room in pairs:
+                b = bell(num, d)
+                t = f"{b[0]}–{b[1]}" if b else "?"
+                lines.append(f"   {num}п {t} · {disc} · {room or 'каб. ?'}"
+                             + (f" · {teacher}" if teacher else ""))
+    if not found_any:
+        lines.append("")
+        lines.append("ℹ️ За прошлую неделю файлов расписания в облаке техникума не найдено.")
+    return "\n".join(lines)
+
+
 def format_week_message():
     today = today_msk()
     lines = ["🗓 РАСПИСАНИЕ НА НЕДЕЛЮ",
@@ -296,7 +362,7 @@ def format_week_message():
     found_any = False
     for i in range(7):
         d = today + dt.timedelta(days=i)
-        pairs, fname, _ = get_day_schedule(d)
+        pairs, fname, _ = get_day_schedule_safe(d)
         wd = WEEKDAYS_RU[d.weekday()]
         marker = " (сегодня)" if i == 0 else (" (завтра)" if i == 1 else "")
         lines.append("")
@@ -354,6 +420,7 @@ def tg_api(token, method, payload=None):
 KEYBOARD = {
     "keyboard": [
         [{"text": "📖 /1 — на сегодня"}, {"text": "📚 /2 — на завтра"}],
+        [{"text": "🗓 /3 — прошлая неделя"}],
     ],
     "resize_keyboard": True,
     "is_persistent": True,
@@ -437,7 +504,8 @@ def poll_commands(token, chat_id, once=False):
                 reply = ("Команды бота:\n"
                          "/1 или /today — расписание на сегодня\n"
                          "/2 или /tomorrow — расписание на завтра\n"
-                         "/week — расписание на неделю\n"
+                         "/3 или /lastweek — расписание на прошлую неделю\n"
+                         "/week — расписание на текущую неделю\n"
                          "Ежедневная отправка — в 20:00 по Москве (или сразу после публикации).")
                 ok, err = tg_send(token, chat, reply, keyboard=True)
                 if not ok:
@@ -449,12 +517,14 @@ def poll_commands(token, chat_id, once=False):
             elif low.startswith("/2") or low.startswith("/tomorrow"):
                 pairs, _, _ = get_day_schedule(tomorrow)
                 reply = format_day_message(tomorrow, pairs)
+            elif low.startswith("/3") or low.startswith("/lastweek"):
+                reply = format_last_week_message()
             elif low.startswith("/week"):
                 reply = format_week_message()
             elif low.startswith("/chatid"):
                 reply = f"Ваш chat_id: {chat}"
             else:
-                reply = "Не понял команду. Кнопки: /1 — сегодня, /2 — завтра. Ещё: /week"
+                reply = "Не понял команду. Кнопки: /1 — сегодня, /2 — завтра, /3 — прошлая неделя. Ещё: /week"
             ok, err = tg_send(token, chat, reply, keyboard=True)
             if not ok:
                 print("send error:", err)
@@ -510,6 +580,8 @@ def main():
         print(f"\n[файл-источник: {fname or 'не найден'}]")
     elif cmd == "week":
         print(format_week_message())
+    elif cmd == "lastweek":
+        print(format_last_week_message())
     elif cmd == "changes":
         date = today_msk() + dt.timedelta(days=1)
         pairs, fname, _ = get_day_schedule(date)
