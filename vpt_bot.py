@@ -592,10 +592,113 @@ KEYBOARD = {
     "keyboard": [
         [{"text": "📖 /1 — на сегодня"}, {"text": "📚 /2 — на завтра"}],
         [{"text": "📦 /3 — посылка"}, {"text": "🗓 /4 — прошлая неделя"}],
+        [{"text": "📝 /5 — задания"}],
     ],
     "resize_keyboard": True,
     "is_persistent": True,
 }
+
+
+# ──────────────────────────── Домашние задания (/задание, /5) ────────────────────────────
+
+HOMEWORK_MAX = 100
+COMMON_SUBJECTS = [
+    "история", "математика", "информатика", "русский язык", "литература",
+    "физика", "химия", "биология", "обществознание", "английский язык",
+    "физическая культура", "физра", "обж", "право", "экономика",
+    "введение в специальность", "индивидуальный проект",
+]
+
+
+def text_after_command(text, cmds):
+    """Текст после команды (команда может стоять в любом месте, как у кнопок)."""
+    low = text.lower()
+    best = None
+    for c in cmds:
+        i = low.find(c)
+        if i >= 0 and (best is None or i < best[0]):
+            best = (i, c)
+    if not best:
+        return text.strip()
+    i, c = best
+    return text[i + len(c):].strip(" :;-,—").strip()
+
+
+def known_subjects():
+    """Известные предметы: из расписания группы (кеш) + типичный список."""
+    subs = {s.lower() for s in COMMON_SUBJECTS}
+    st = load_state()
+    for c in (st.get("schedule_cache", {}) or {}).values():
+        for p in c.get("pairs") or []:
+            if p and p[1]:
+                subs.add(p[1].lower())
+    return subs
+
+
+def split_subject(rest):
+    """Отделяет предмет от текста задания: «история выучить §5» → («история», «выучить §5»)."""
+    toks = rest.split()
+    subs = known_subjects()
+    for n in (2, 1):  # проверяем и два слова («русский язык»), и одно
+        if len(toks) >= n:
+            cand = " ".join(toks[:n]).lower().rstrip(":;,.—-")
+            if cand in subs:
+                return " ".join(toks[:n]).rstrip(":;,.—-"), " ".join(toks[n:]).strip()
+    return None, rest
+
+
+def save_homework(text, photo_id=None):
+    st = load_state()
+    hw = st.setdefault("homework", [])
+    subject, body = split_subject(text)
+    if not body and not photo_id:
+        return None, "пусто"
+    item = {"n": (hw[-1]["n"] + 1) if hw else 1,
+            "date": today_msk().isoformat(),
+            "subject": (subject or "Общее").capitalize() if subject != "Общее" else "Общее",
+            "text": body, "photo": photo_id}
+    hw.append(item)
+    if len(hw) > HOMEWORK_MAX:
+        del hw[:len(hw) - HOMEWORK_MAX]
+    save_state(st)
+    return item, None
+
+
+def format_homework_message():
+    st = load_state()
+    hw = st.get("homework", [])
+    if not hw:
+        return ("📝 Заданий пока нет.\n\n"
+                "Добавить: /задание <предмет> <текст>\n"
+                "Например: /задание история выучить §5\n"
+                "Можно прислать фото с подписью /задание <предмет>\n"
+                "Список: /5")
+    lines = ["📝 ЗАДАНИЯ (всего: {})".format(len(hw)), "━━━━━━━━━━━━━━"]
+    by_subj = {}
+    for it in hw:
+        by_subj.setdefault(it["subject"], []).append(it)
+    for subj, items in by_subj.items():
+        lines += ["", f"📚 {subj}:"]
+        for it in items:
+            d = f"{it['date'][8:10]}.{it['date'][5:7]}"
+            t = it["text"] or "📷 фото"
+            mark = " (+📷 фото)" if it.get("photo") and it.get("text") else ""
+            lines.append(f"  {it['n']}. {t}{mark} — {d}")
+    lines += ["", "Удалить: /задание удалить <номер>"]
+    return "\n".join(lines)
+
+
+def send_homework_list(token, chat, keyboard=True):
+    tg_send(token, chat, format_homework_message(), keyboard=keyboard)
+    # прикреплённые фото отправляем отдельно (по file_id, без скачивания)
+    st = load_state()
+    for it in st.get("homework", []):
+        if it.get("photo"):
+            cap = f"📝 #{it['n']} {it['subject']}"
+            if it.get("text"):
+                cap += f": {it['text']}"
+            tg_api(token, "sendPhoto", {"chat_id": chat, "photo": it["photo"],
+                                        "caption": cap[:900]})
 
 
 def tg_send(token, chat_id, text, keyboard=False):
@@ -636,6 +739,7 @@ COMMAND_WORDS = {
     "сегодня": "/1", "завтра": "/2",
     "прошл": "/4",
     "неделю": "/week", "неделя": "/week",
+    "задания": "/5", "задание": "/5",
     "старт": "/start", "привет": "/start", "начать": "/start",
     "помощь": "/help", "help": "/help",
 }
@@ -694,7 +798,7 @@ def poll_commands(token, chat_id, once=False, max_seconds=None):
         for upd in updates:
             max_update_id = max(max_update_id, upd["update_id"])
             msg = upd.get("message") or upd.get("edited_message") or {}
-            text = (msg.get("text") or "").strip()
+            text = (msg.get("text") or msg.get("caption") or "").strip()
             chat = msg.get("chat", {}).get("id")
             if not text or not chat:
                 continue
@@ -732,7 +836,9 @@ def poll_commands(token, chat_id, once=False, max_seconds=None):
                          "сохранённые данные.\n\n")
                 reply += ("Привет! Я бот-помощник ВПТ (корпус №2, группа РКЛ-3).\n"
                           "Кнопки внизу: /1 — на сегодня, /2 — на завтра, /3 — посылка, "
-                          "/4 — прошлая неделя.\n"
+                          "/4 — прошлая неделя, /5 — задания.\n"
+                          "Домашку записывай так: /задание история выучить §5 "
+                          "(или пришли фото с подписью /задание).\n"
                           "Вечером (после 13:00) слежу за публикацией расписания на завтра "
                           "и присылаю сразу, как оно появится.\n"
                           "За посылками Яндекс Доставки слежу каждые 5 часов.\n\n"
@@ -748,6 +854,10 @@ def poll_commands(token, chat_id, once=False, max_seconds=None):
                          "/2 или /tomorrow — расписание на завтра\n"
                          "/3 или /посылка — отследить посылку Яндекс Доставки\n"
                          "/4 или /lastweek — расписание на прошлую неделю\n"
+                         "/5 или /задания — все записанные задания\n"
+                         "/задание <предмет> <текст> — записать задание "
+                         "(предмет можно не указывать)\n"
+                         "/задание удалить <номер> — удалить задание\n"
                          "/week — расписание на текущую неделю\n"
                          "Расписание на завтра приходит в 20:00 (или сразу после публикации).\n"
                          "Посылки проверяются каждые 5 часов, при движении приходит уведомление.")
@@ -764,6 +874,46 @@ def poll_commands(token, chat_id, once=False, max_seconds=None):
                     save_state(st)
                     tg_send(token, chat, "📦 Отправь мне трек-номер посылки Яндекс Доставки "
                                          "(например, LO-835645864)", keyboard=True)
+                continue
+            if low.startswith("/5") or low.startswith("/задан"):
+                # сохранить можно только через /задание; /5 и слова — показать список
+                wants_save = text.lower().startswith("/задание") or "/задание " in text.lower()
+                rest = text_after_command(text, ["/задание", "/задания", "/5"]) if wants_save else ""
+                lowr = rest.lower()
+                if not rest and not msg.get("photo"):
+                    send_homework_list(token, chat, keyboard=True)
+                elif lowr.startswith("очист"):
+                    st = load_state()
+                    st["homework"] = []
+                    save_state(st)
+                    tg_send(token, chat, "🗑 Все задания удалены.", keyboard=True)
+                elif lowr.startswith(("удали", "удалить")):
+                    m = re.search(r"\d+", rest)
+                    st = load_state()
+                    hw = st.get("homework", [])
+                    if m:
+                        n = int(m.group())
+                        before = len(hw)
+                        st["homework"] = [x for x in hw if x["n"] != n]
+                        save_state(st)
+                        if len(st["homework"]) < before:
+                            tg_send(token, chat, f"✅ Задание #{n} удалено.", keyboard=True)
+                        else:
+                            tg_send(token, chat, f"Задание #{n} не найдено. Список: /5",
+                                    keyboard=True)
+                    else:
+                        tg_send(token, chat, "Формат: /задание удалить <номер>", keyboard=True)
+                else:
+                    photo_id = msg.get("photo", [])[-1]["file_id"] if msg.get("photo") else None
+                    item, err = save_homework(rest, photo_id)
+                    if err:
+                        tg_send(token, chat, "Пустое задание. Пример: /задание история выучить §5",
+                                keyboard=True)
+                    else:
+                        what = item["text"] or "📷 фото"
+                        tg_send(token, chat,
+                                f"✅ Задание сохранено: #{item['n']} {item['subject']}\n"
+                                f"{what}\n\nВсе задания: /5", keyboard=True)
                 continue
             if low.startswith("/1") or low.startswith("/today"):
                 pairs, _, _, stale = get_day_schedule_cached(today)
