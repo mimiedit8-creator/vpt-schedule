@@ -629,14 +629,20 @@ def resolve_chat_id(token):
     return None, None
 
 
-def poll_commands(token, chat_id, once=False):
+def poll_commands(token, chat_id, once=False, max_seconds=None):
     """Отвечает на команды бота. once=True — одна проверка getUpdates (для cron).
 
     Подтверждает обработанные обновления на сервере Telegram (offset),
     чтобы не отвечать на них повторно — локальное состояние не требуется.
+    max_seconds ограничивает время работы (long polling 25с — ответы
+    приходят практически мгновенно; для GitHub Actions слушаем ~40 мин/час).
     """
     offset = load_state().get("tg_offset", 0)
+    deadline = time.time() + max_seconds if max_seconds else None
     while True:
+        if deadline and time.time() >= deadline:
+            print(f"[скорость] время работы исчерпано ({max_seconds}с), выхожу")
+            return
         res = tg_api(token, "getUpdates", {"timeout": 0 if once else 25,
                                            "offset": offset, "limit": 20})
         if not res.get("ok"):
@@ -838,7 +844,14 @@ def main():
         token = os.environ.get("TG_TOKEN", "")
         if not token:
             print("Нужен TG_TOKEN"); sys.exit(1)
-        poll_commands(token, os.environ.get("TG_CHAT_ID", ""), once="--once" in args)
+        max_s = None
+        if "--max-seconds" in args:
+            try:
+                max_s = int(args[args.index("--max-seconds") + 1])
+            except (IndexError, ValueError):
+                print("Формат: --max-seconds 2400"); sys.exit(1)
+        poll_commands(token, os.environ.get("TG_CHAT_ID", ""), once="--once" in args,
+                      max_seconds=max_s)
     else:
         print(__doc__)
 
