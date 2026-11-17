@@ -617,7 +617,7 @@ def resolve_chat_id(token):
     chat_id = None
     for upd in reversed(res.get("result", [])):
         msg = upd.get("message") or {}
-        if msg.get("text", "").startswith("/start"):
+        if "/start" in msg.get("text", "").lower():
             chat_id = msg["chat"]["id"]
             first = msg["chat"].get("first_name", "")
             return chat_id, first
@@ -627,6 +627,43 @@ def resolve_chat_id(token):
         if msg.get("chat", {}).get("type") == "private":
             return msg["chat"]["id"], msg["chat"].get("first_name", "")
     return None, None
+
+
+TRACK_RE_FMT = re.compile(r"[A-Za-z0-9-]{6,40}")
+
+COMMAND_WORDS = {
+    "посылк": "/3", "посыл": "/3", "пакет": "/3", "трек": "/3",
+    "сегодня": "/1", "завтра": "/2",
+    "прошл": "/4",
+    "неделю": "/week", "неделя": "/week",
+    "старт": "/start", "привет": "/start", "начать": "/start",
+    "помощь": "/help", "help": "/help",
+}
+
+
+def parse_command(text):
+    """Команда из сообщения.
+
+    Кнопки Telegram присылают текст целиком — «📦 /3 — посылка»,
+    поэтому ищем /команду в любом месте текста. Понимаем и простые
+    слова («посылка», «сегодня») без слэша.
+    """
+    low = text.lower()
+    m = re.search(r"/[a-zа-яё0-9]+", low)
+    if m:
+        return m.group(0)
+    for word, cmd in COMMAND_WORDS.items():
+        if word in low:
+            return cmd
+    return low.split("@")[0]
+
+
+def extract_track_arg(text):
+    """Трек-номер из сообщения вида «/3 LO-835645864» (или нажатой кнопки)."""
+    for tok in text.split():
+        if TRACK_RE_FMT.fullmatch(tok) and len(tok) >= 6:
+            return tok
+    return ""
 
 
 def poll_commands(token, chat_id, once=False, max_seconds=None):
@@ -661,7 +698,7 @@ def poll_commands(token, chat_id, once=False, max_seconds=None):
             chat = msg.get("chat", {}).get("id")
             if not text or not chat:
                 continue
-            low = text.lower().split("@")[0]
+            low = parse_command(text)
             today = today_msk()
             tomorrow = today + dt.timedelta(days=1)
             st = load_state()
@@ -680,10 +717,10 @@ def poll_commands(token, chat_id, once=False, max_seconds=None):
                 continue
 
             # ── ожидание трек-номера после /3 ──
-            if st.get("pending_track", {}).get(str(chat)) and not text.startswith("/"):
+            if st.get("pending_track", {}).get(str(chat)) and not low.startswith("/"):
                 st.setdefault("pending_track", {}).pop(str(chat), None)
                 save_state(st)
-                handle_track_number(token, chat, text)
+                handle_track_number(token, chat, extract_track_arg(text) or text)
                 continue
 
             # ── команды ──
@@ -719,7 +756,7 @@ def poll_commands(token, chat_id, once=False, max_seconds=None):
                     print("send error:", err)
                 continue
             if low.startswith("/3") or low.startswith("/посылка"):
-                arg = text.split(maxsplit=1)[1].strip() if len(text.split(maxsplit=1)) > 1 else ""
+                arg = extract_track_arg(text)
                 if arg:
                     handle_track_number(token, chat, arg)
                 else:
