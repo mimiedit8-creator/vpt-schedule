@@ -723,8 +723,7 @@ KB_MAIN = kb([
     [{"text": "📅 Расписание"}, {"text": "📦 Посылки"}],
     [{"text": "🤖 ИИ-ассистент"}, {"text": "📊 Статистика"}],
     [{"text": "⚙️ Настройки"}, {"text": "📰 Новости"}],
-    [{"text": "🧹 Очистка кеша"}, {"text": "🤝 Дружба"}],
-    [{"text": "❓ Помощь"}],
+    [{"text": "🧹 Очистка кеша"}, {"text": "❓ Помощь"}],
 ])
 
 # ── клавиатура режима ИИ ──
@@ -1553,124 +1552,6 @@ def extract_track_arg(text):
     return ""
 
 
-
-# ──────────────────────────── Дружба: даты, дни рождения и реакции ────────────────────────────
-
-def _friendship_profile(st, chat):
-    return (st.setdefault("friendship", {}).setdefault("profiles", {})
-            .setdefault(str(chat), {}))
-
-
-def _parse_friend_date(value):
-    value = (value or "").strip()
-    for fmt in ("%d.%m.%Y", "%Y-%m-%d", "%d/%m/%Y"):
-        try:
-            return dt.datetime.strptime(value, fmt).date()
-        except ValueError:
-            pass
-    return None
-
-
-def _duration_ru(days):
-    years, rem = divmod(days, 365)
-    months, rem = divmod(rem, 30)
-    parts = []
-    if years:
-        parts.append(f"{years} {('год' if years % 10 == 1 and years % 100 != 11 else 'года' if 2 <= years % 10 <= 4 and not 12 <= years % 100 <= 14 else 'лет')}")
-    if months:
-        parts.append(f"{months} мес.")
-    parts.append(f"{rem} дн.")
-    return " ".join(parts)
-
-
-def send_friendship_menu(token, chat):
-    st = load_state()
-    profile = (st.get("friendship", {}).get("profiles", {}) or {}).get(str(chat), {})
-    today = today_msk()
-    lines = ["🤝 НАША ДРУЖБА", "━━━━━━━━━━━━━━"]
-    started = _parse_friend_date(profile.get("since", ""))
-    birthday = _parse_friend_date(profile.get("birthday", ""))
-    if started and started <= today:
-        days = (today - started).days
-        lines += [f"💛 Дружим с: {started.strftime('%d.%m.%Y')}",
-                  f"⏳ Мы общаемся уже: {_duration_ru(days)} ({days} дней)"]
-    else:
-        lines.append("💛 Дата начала общения пока не установлена.")
-    if birthday:
-        try:
-            next_bday = birthday.replace(year=today.year)
-        except ValueError:  # 29 февраля в невисокосный год
-            next_bday = dt.date(today.year, 2, 28)
-        if next_bday < today:
-            try:
-                next_bday = birthday.replace(year=today.year + 1)
-            except ValueError:
-                next_bday = dt.date(today.year + 1, 2, 28)
-        left = (next_bday - today).days
-        lines.append(f"🎂 День рождения: {birthday.strftime('%d.%m.%Y')}")
-        lines.append("🎉 Сегодня день рождения!" if left == 0 else f"До дня рождения: {left} дн.")
-    else:
-        lines.append("🎂 День рождения пока не указан.")
-    lines += ["", "Настройки (даты вводятся в формате ДД.ММ.ГГГГ):",
-              "/дружба дата 01.09.2025 — день начала общения",
-              "/дружба др 15.04.2008 — твой день рождения",
-              "/дружба сброс — удалить обе даты",
-              "", "Реакции:",
-              "/обнять @username — отправить объятие",
-              "/поцеловать @username — отправить поцелуй",
-              "", "Получатель должен хотя бы раз открыть бота через /start."]
-    tg_send(token, chat, "\n".join(lines), keyboard=True)
-
-
-def _register_friendship_user(st, msg):
-    """Регистрируем только личные чаты: бот сможет отправить им личное уведомление."""
-    chat_obj = msg.get("chat") or {}
-    user = msg.get("from") or {}
-    if chat_obj.get("type") != "private" or not user.get("id"):
-        return
-    registry = st.setdefault("friendship", {}).setdefault("users", {})
-    entry = {"chat_id": user["id"], "first_name": user.get("first_name") or "Пользователь",
-             "username": (user.get("username") or "").lower()}
-    registry[str(user["id"])] = entry
-    if entry["username"]:
-        st.setdefault("friendship", {}).setdefault("usernames", {})[entry["username"]] = str(user["id"])
-
-
-def send_friend_action(token, sender_chat, msg, action):
-    match = re.search(r"@([A-Za-z0-9_]{5,32})", msg)
-    if not match:
-        tg_send(token, sender_chat,
-                f"Формат: /{action} @username\nУ пользователя должен быть открыт личный чат с ботом.",
-                keyboard=True)
-        return
-    username = match.group(1).lower()
-    st = load_state()
-    friendship = st.get("friendship", {})
-    user_id = (friendship.get("usernames", {}) or {}).get(username)
-    target = (friendship.get("users", {}) or {}).get(str(user_id)) if user_id else None
-    if not target:
-        tg_send(token, sender_chat,
-                f"Не нашёл @{username}. Он должен сначала открыть бота и нажать /start в личном чате.",
-                keyboard=True)
-        return
-    sender = (friendship.get("users", {}) or {}).get(str(sender_chat), {})
-    sender_name = sender.get("first_name") or "Кто-то"
-    if str(target.get("chat_id")) == str(sender_chat):
-        tg_send(token, sender_chat, "Себя обнимать можно, но уведомление самому себе не отправляю 🙂",
-                keyboard=True)
-        return
-    emoji, verb = ("🤗", "обнял(а)") if action == "обнять" else ("😘", "поцеловал(а)")
-    ok, err = tg_send(token, target["chat_id"],
-                      f"{emoji} @{sender.get('username') or sender_name} {verb} тебя!\n"
-                      "Это дружеская реакция из бота 💛")
-    if ok:
-        tg_send(token, sender_chat, f"{emoji} Уведомление отправлено @{username}!", keyboard=True)
-    else:
-        tg_send(token, sender_chat,
-                "Не удалось доставить уведомление. Возможно, пользователь заблокировал бота или чат недоступен.",
-                keyboard=True)
-
-
 # ──────────────────────────── Обработка сообщений ────────────────────────────
 
 def handle_message(token, chat_id, msg):
@@ -1695,10 +1576,6 @@ def handle_message(token, chat_id, msg):
         else:
             tg_send(token, chat, "🔒 Это приватный бот. Введите пароль для доступа.")
         return
-
-    # Учитываем пользователя только после прохождения проверки доступа.
-    _register_friendship_user(st, msg)
-    save_state(st)
 
     # ── новые быстрые команды /6–/9 ──
     # Проверяем их до режима ИИ, чтобы команды работали даже внутри диалога.
@@ -1758,37 +1635,6 @@ def handle_message(token, chat_id, msg):
     st.setdefault("stats", {})["cmd"] = st["stats"].get("cmd", 0) + 1
     save_state(st)
 
-    # ── дружба ──
-    if low == "/дружба" or text == "🤝 Дружба":
-        send_friendship_menu(token, chat)
-        return
-    if low.startswith("/дружба "):
-        args = text.split(maxsplit=2)
-        if len(args) >= 3 and args[1].lower() in ("дата", "др"):
-            parsed = _parse_friend_date(args[2])
-            if (not parsed or parsed > today + dt.timedelta(days=36600)
-                    or (args[1].lower() == "дата" and parsed > today)):
-                tg_send(token, chat, "Не понял дату. Для начала общения укажи прошедшую дату, для дня рождения — дату в формате ДД.ММ.ГГГГ.", keyboard=True)
-                return
-            profile = _friendship_profile(st, chat)
-            profile["since" if args[1].lower() == "дата" else "birthday"] = parsed.isoformat()
-            save_state(st)
-            send_friendship_menu(token, chat)
-            return
-        if len(args) >= 2 and args[1].lower() in ("сброс", "очистить"):
-            (st.get("friendship", {}).get("profiles", {}) or {}).pop(str(chat), None)
-            save_state(st)
-            tg_send(token, chat, "Даты дружбы и дня рождения удалены.", keyboard=True)
-            return
-        send_friendship_menu(token, chat)
-        return
-    if low.startswith("/обнять"):
-        send_friend_action(token, chat, text, "обнять")
-        return
-    if low.startswith("/поцеловать"):
-        send_friend_action(token, chat, text, "поцеловать")
-        return
-
     # ── меню-разделы ──
     if low.startswith("menu:sched"):
         send_schedule_menu(token, chat)
@@ -1813,8 +1659,8 @@ def handle_message(token, chat_id, msg):
         reply += ("Привет! Я бот-помощник ВПТ (корпус №2, группа РКЛ-3).\n"
                   "Главное меню — кнопки внизу: 📅 Расписание, 🤖 ИИ-ассистент, "
                   "📦 Посылки, ⭐ Избранное, ⚙️ Настройки, 📰 Новости, "
-                  "🧹 Очистка кеша, 🤝 Дружба, 📊 Статистика.\n"
-                  "Команды: /6 — безопасная очистка кеша, /новости — свежие новости, /дружба — даты и реакции, "
+                  "🧹 Очистка кеша, 📊 Статистика.\n"
+                  "Команды: /6 — безопасная очистка кеша, /новости — свежие новости, "
                   "/8 — перезапуск (администратор), /ai — ИИ-ассистент.\n"
                   "Домашку записывай: /задание история выучить §5 "
                   "(или пришли фото с подписью /задание).\n"
@@ -1920,7 +1766,7 @@ def handle_message(token, chat_id, msg):
         reply = f"Ваш chat_id: {chat}"
     else:
         reply = ("Не понял команду 🙂\n"
-                 "Используй кнопки меню внизу, /дружба или /help — покажу всё, что умею.")
+                 "Используй кнопки меню внизу или /help — покажу всё, что умею.")
     log.info("[скорость] команда %r подготовлена за %.2fс", low[:12], time.time() - t_cmd)
     tg_send(token, chat, reply, keyboard=True)
 
