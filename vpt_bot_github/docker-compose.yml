@@ -1,0 +1,13 @@
+services:
+  vpt-telegram-bot:
+    build: .
+    container_name: vpt-telegram-bot
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      DATA_DIR: /data
+      STATE_FILE: /data/state.json
+      TZ: Europe/Moscow
+    volumes:
+      - ./data:/data
