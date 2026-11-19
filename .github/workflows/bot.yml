@@ -22,8 +22,6 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -51,11 +49,14 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add -A
-          if ! git diff --cached --quiet; then
-            git commit -m "Update bot state"
+          if ! git diff --quiet || [ -n "$(git ls-files --others --exclude-standard)" ]; then
+            mkdir -p /tmp/bot_backup
+            cp -rf vpt_bot_github/state.json state.json latest.xlsx music_cache.json /tmp/bot_backup/ 2>/dev/null || true
             git fetch origin main
-            git reset --soft origin/main
-            git commit -m "Update bot state" || true
+            git reset --hard origin/main
+            cp -rf /tmp/bot_backup/* . 2>/dev/null || true
+            [ -f /tmp/bot_backup/state.json ] && cp -f /tmp/bot_backup/state.json vpt_bot_github/state.json 2>/dev/null || true
+            git add -A
+            git diff --cached --quiet || git commit -m "Update bot state"
             git push origin main
           fi
