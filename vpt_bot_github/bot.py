@@ -1635,7 +1635,10 @@ def handle_message(token, chat_id, msg):
     stats = st.setdefault("stats", {})
 stats["cmd"] = stats.get("cmd", 0) + 1
 
+      stats = st.setdefault("stats", {})
+    stats["cmd"] = stats.get("cmd", 0) + 1
     save_state(st)
+
 
     # ── меню-разделы ──
     if low.startswith("menu:sched"):
