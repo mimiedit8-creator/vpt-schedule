@@ -50,6 +50,8 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add -A
-          git diff --cached --quiet || git commit -m "Update bot state"
-          git pull --rebase --autostash origin main
-          git push
+          if ! git diff --cached --quiet; then
+            git commit -m "Update bot state"
+            git pull --rebase -X theirs origin main || git rebase --abort
+            git push
+          fi
