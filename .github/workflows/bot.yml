@@ -52,6 +52,7 @@ jobs:
           git add -A
           if ! git diff --cached --quiet; then
             git commit -m "Update bot state"
-            git pull --no-rebase -s recursive -X ours origin main || true
-            git push -f origin main
+            git pull --rebase origin main
+            git push origin main
           fi
+
