@@ -9,7 +9,7 @@ permissions:
   contents: write
 
 concurrency:
-  group: rkl3-bot
+  group: vpt-schedule-main-push
   cancel-in-progress: false
 
 jobs:
@@ -22,6 +22,8 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -52,5 +54,8 @@ jobs:
           git add -A
           if ! git diff --cached --quiet; then
             git commit -m "Update bot state"
-            git push --force origin main
+            git fetch origin main
+            git reset --soft origin/main
+            git commit -m "Update bot state" || true
+            git push origin main
           fi
