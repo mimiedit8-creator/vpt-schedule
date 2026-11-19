@@ -29,14 +29,19 @@ jobs:
           python-version: "3.11"
 
       - name: Install dependencies
-        run: pip install -r requirements.txt
+        run: |
+          if [ -s requirements.txt ]; then
+            pip install -r requirements.txt
+          fi
 
-      - name: Run bot
+      - name: Run bot tasks
         env:
           TG_TOKEN: ${{ secrets.TG_TOKEN || secrets.BOT_TOKEN }}
           BOT_TOKEN: ${{ secrets.BOT_TOKEN || secrets.TG_TOKEN }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-        run: python vpt_bot.py
+        run: |
+          python vpt_bot.py auto
+          timeout 45s python vpt_bot.py poll || true
 
       - name: Save state
         working-directory: .
