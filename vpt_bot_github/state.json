@@ -33,8 +33,10 @@
  },
  "track_status": {},
  "stats": {
-  "cmd": 2
+  "cmd": 3
  },
  "ai_mode": {},
- "pending_track": {}
+ "pending_track": {
+  "1753638822": true
+ }
 }
