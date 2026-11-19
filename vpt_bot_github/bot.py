@@ -1632,7 +1632,9 @@ def handle_message(token, chat_id, msg):
         return
 
     # счётчик команд
-    st.setdefault("stats", {})["cmd"] = st["stats"].get("cmd", 0) + 1
+    stats = st.setdefault("stats", {})
+stats["cmd"] = stats.get("cmd", 0) + 1
+
     save_state(st)
 
     # ── меню-разделы ──
