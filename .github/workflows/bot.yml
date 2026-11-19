@@ -10,8 +10,8 @@ on:
 
   workflow_dispatch:
     inputs:
-      action:
-        description: 'Выбери действие'
+      job:
+        description: 'Что выполнить'
         required: true
         type: choice
         options:
@@ -21,14 +21,19 @@ on:
           - track
           - test
 
+permissions:
+  contents: write
+
 jobs:
   send:
-    if: github.event.schedule == '0 17 * * *' || inputs.action == 'send'
+    if: github.event.schedule == '0 17 * * *' || inputs.job == 'send'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - name: Download repository
+        uses: actions/checkout@v4
 
-      - uses: actions/setup-python@v5
+      - name: Setup Python
+        uses: actions/setup-python@v5
         with:
           python-version: '3.11'
 
@@ -47,17 +52,18 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add state.json music_cache.json
-          git diff --cached --quiet || git commit -m "state update [skip ci]"
-          git push
+          git add -A
+          git diff --cached --quiet || (git commit -m "state update [skip ci]" && git push)
 
   poll:
-    if: github.event.schedule == '10 * * * *' || inputs.action == 'poll'
+    if: github.event.schedule == '10 * * * *' || inputs.job == 'poll'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - name: Download repository
+        uses: actions/checkout@v4
 
-      - uses: actions/setup-python@v5
+      - name: Setup Python
+        uses: actions/setup-python@v5
         with:
           python-version: '3.11'
 
@@ -76,17 +82,18 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add state.json music_cache.json
-          git diff --cached --quiet || git commit -m "state update [skip ci]"
-          git push
+          git add -A
+          git diff --cached --quiet || (git commit -m "state update [skip ci]" && git push)
 
   watch:
-    if: github.event.schedule == '5/30 10-19 * * *' || inputs.action == 'watch'
+    if: github.event.schedule == '5/30 10-19 * * *' || inputs.job == 'watch'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - name: Download repository
+        uses: actions/checkout@v4
 
-      - uses: actions/setup-python@v5
+      - name: Setup Python
+        uses: actions/setup-python@v5
         with:
           python-version: '3.11'
 
@@ -105,17 +112,18 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add state.json music_cache.json
-          git diff --cached --quiet || git commit -m "state update [skip ci]"
-          git push
+          git add -A
+          git diff --cached --quiet || (git commit -m "state update [skip ci]" && git push)
 
   track:
-    if: github.event.schedule == '0 */5 * * *' || inputs.action == 'track'
+    if: github.event.schedule == '0 */5 * * *' || inputs.job == 'track'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - name: Download repository
+        uses: actions/checkout@v4
 
-      - uses: actions/setup-python@v5
+      - name: Setup Python
+        uses: actions/setup-python@v5
         with:
           python-version: '3.11'
 
@@ -134,17 +142,18 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add state.json music_cache.json
-          git diff --cached --quiet || git commit -m "state update [skip ci]"
-          git push
+          git add -A
+          git diff --cached --quiet || (git commit -m "state update [skip ci]" && git push)
 
   test:
-    if: inputs.action == 'test'
+    if: inputs.job == 'test'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - name: Download repository
+        uses: actions/checkout@v4
 
-      - uses: actions/setup-python@v5
+      - name: Setup Python
+        uses: actions/setup-python@v5
         with:
           python-version: '3.11'
 
