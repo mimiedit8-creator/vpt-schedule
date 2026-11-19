@@ -1,16 +1,13 @@
+
 name: ВПТ бот расписания
 
 on:
   schedule:
-    # 20:00 по Москве (UTC+3) — гарантированная отправка расписания на завтра
     - cron: "0 17 * * *"
-    # каждый час — обработка команд /1 /2 /3 /4 (около :10)
     - cron: "10 * * * *"
-    # с 13:00 до 22:35 по Москве каждые ~30 минут — проверка публикации
-    # расписания на завтра; как только файл появляется (или меняется) — сразу отправка
     - cron: "5/30 10-19 * * *"
-    # каждые 5 часов — проверка посылок Яндекс Доставки (уведомление при движении)
     - cron: "0 */5 * * *"
+
   workflow_dispatch:
     inputs:
       job:
@@ -29,18 +26,22 @@ jobs:
       contents: write
     steps:
       - uses: actions/checkout@v4
-        with:
-          fetch-depth: 1
 
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Установить зависимости
+        run: pip install -r vpt_bot_github/requirements.txt
 
       - name: Отправить расписание на завтра
         env:
           TG_TOKEN: ${{ secrets.TG_TOKEN }}
           TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
           TG_PASSWORD: ${{ secrets.TG_PASSWORD }}
-        run: python3 vpt_bot.py send tomorrow
+        run: python3 vpt_bot_github/vpt_bot.py send tomorrow
 
-      - name: Сохранить состояние (защита от дублей)
+      - name: Сохранить состояние
         run: |
           git config user.name "vpt-bot"
           git config user.email "bot@users.noreply.github.com"
@@ -56,18 +57,22 @@ jobs:
       contents: write
     steps:
       - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
         with:
-          fetch-depth: 1
+          python-version: "3.11"
 
+      - name: Установить зависимости
+        run: pip install -r vpt_bot_github/requirements.txt
 
-      - name: Проверить публикацию расписания на завтра
+      - name: Проверить публикацию расписания
         env:
           TG_TOKEN: ${{ secrets.TG_TOKEN }}
           TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
           TG_PASSWORD: ${{ secrets.TG_PASSWORD }}
-        run: python3 vpt_bot.py send tomorrow --only-published
+        run: python3 vpt_bot_github/vpt_bot.py send tomorrow --only-published
 
-      - name: Сохранить состояние (защита от дублей)
+      - name: Сохранить состояние
         run: |
           git config user.name "vpt-bot"
           git config user.email "bot@users.noreply.github.com"
@@ -83,18 +88,22 @@ jobs:
       contents: write
     steps:
       - uses: actions/checkout@v4
-        with:
-          fetch-depth: 1
 
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Установить зависимости
+        run: pip install -r vpt_bot_github/requirements.txt
 
       - name: Проверить посылки Яндекс Доставки
         env:
           TG_TOKEN: ${{ secrets.TG_TOKEN }}
           TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
           TG_PASSWORD: ${{ secrets.TG_PASSWORD }}
-        run: python3 vpt_bot.py track
+        run: python3 vpt_bot_github/vpt_bot.py track
 
-      - name: Сохранить состояние (статусы посылок)
+      - name: Сохранить состояние
         run: |
           git config user.name "vpt-bot"
           git config user.email "bot@users.noreply.github.com"
@@ -108,9 +117,13 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
-        with:
-          fetch-depth: 1
 
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Установить зависимости
+        run: pip install -r vpt_bot_github/requirements.txt
 
       - name: Тестовое сообщение в Telegram
         env:
@@ -118,8 +131,8 @@ jobs:
           TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
           TG_PASSWORD: ${{ secrets.TG_PASSWORD }}
         run: |
-          python3 vpt_bot.py musictest
-          python3 vpt_bot.py send tomorrow --force
+          python3 vpt_bot_github/vpt_bot.py musictest
+          python3 vpt_bot_github/vpt_bot.py send tomorrow --force
 
   poll:
     if: github.event_name == 'schedule' && github.event.schedule == '10 * * * *' || (github.event_name == 'workflow_dispatch' && inputs.job == 'poll')
@@ -132,17 +145,22 @@ jobs:
       contents: write
     steps:
       - uses: actions/checkout@v4
-        with:
-          fetch-depth: 1
 
-      - name: Слушать команды (~40 минут, long polling)
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Установить зависимости
+        run: pip install -r vpt_bot_github/requirements.txt
+
+      - name: Слушать команды (~40 минут)
         env:
           TG_TOKEN: ${{ secrets.TG_TOKEN }}
           TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
           TG_PASSWORD: ${{ secrets.TG_PASSWORD }}
-        run: python3 vpt_bot.py poll --max-seconds 2400
+        run: python3 vpt_bot_github/vpt_bot.py poll --max-seconds 2400
 
-      - name: Сохранить состояние (пароли, посылки)
+      - name: Сохранить состояние
         run: |
           git config user.name "vpt-bot"
           git config user.email "bot@users.noreply.github.com"
