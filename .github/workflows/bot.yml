@@ -58,15 +58,23 @@ jobs:
 
           git commit -m "Update bot state"
 
-          for attempt in 1 2 3 4 5; do
-            git pull --rebase --autostash origin main
-            if git push origin main; then
+          for attempt in 1 2 3 4 5 6; do
+            git fetch origin main
+            if ! git rebase origin/main; then
+              echo "Rebase conflict detected, resolving with ours..."
+              git checkout --ours . || true
+              git add -A
+              git rebase --continue || git rebase --abort
+            fi
+
+            if git push origin HEAD:main; then
               echo "Pushed successfully on attempt $attempt."
               exit 0
             fi
-            echo "Push rejected on attempt $attempt, retrying..."
+
+            echo "Push failed on attempt $attempt, retrying..."
             sleep $((attempt * 2))
           done
 
-          echo "Failed to push origin main after retries."
+          echo "Failed to push after 6 attempts."
           exit 1
