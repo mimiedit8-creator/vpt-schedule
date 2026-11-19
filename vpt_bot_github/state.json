@@ -1,7 +1,7 @@
 {
  "schedule_cache": {
   "2026-11-19": {
-   "fetched_at": 1795117744.8817787,
+   "fetched_at": 1795118410.3878336,
    "pairs": [
     [
      1,
@@ -33,10 +33,24 @@
  },
  "track_status": {},
  "stats": {
-  "cmd": 8
+  "cmd": 8,
+  "ai": 1
  },
  "ai_mode": {
   "1753638822": true
  },
- "pending_track": {}
+ "pending_track": {},
+ "ai": {
+  "1753638822": {
+   "msgs": [],
+   "model": "gemini-2.5-flash"
+  }
+ },
+ "ai_rl": {
+  "1753638822": {
+   "n": 1,
+   "h": 498644
+  }
+ },
+ "tg_offset": 423427631
 }
