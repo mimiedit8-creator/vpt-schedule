@@ -1,7 +1,7 @@
 {
  "schedule_cache": {
   "2026-11-19": {
-   "fetched_at": 1795107074.3389475,
+   "fetched_at": 1795111057.46223,
    "pairs": [
     [
      1,
@@ -33,7 +33,7 @@
  },
  "track_status": {},
  "stats": {
-  "cmd": 6
+  "cmd": 7
  },
  "ai_mode": {},
  "pending_track": {
