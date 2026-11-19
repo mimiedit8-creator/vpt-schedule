@@ -1,168 +1,47 @@
-
-name: ВПТ бот расписания
+name: RKL-3 bot
 
 on:
-  schedule:
-    - cron: '0 17 * * *'
-    - cron: '10 * * * *'
-    - cron: '5/30 10-19 * * *'
-    - cron: '0 */5 * * *'
-
   workflow_dispatch:
-    inputs:
-      job:
-        description: 'Что выполнить'
-        required: true
-        type: choice
-        options:
-          - send
-          - poll
-          - watch
-          - track
-          - test
+  schedule:
+    - cron: "0 */2 * * *"
 
 permissions:
   contents: write
 
+concurrency:
+  group: rkl3-bot
+  cancel-in-progress: false
+
 jobs:
-  send:
-    if: github.event.schedule == '0 17 * * *' || inputs.job == 'send'
+  run-bot:
     runs-on: ubuntu-latest
+    timeout-minutes: 3
     steps:
-      - name: Download repository
+      - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Setup Python
+      - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
+          python-version: "3.11"
 
       - name: Install dependencies
-        run: pip install -r requirements.txt
+        run: |
+          if [ -f requirements.txt ]; then
+            pip install -r requirements.txt
+          else
+            pip install aiogram aiohttp beautifulsoup4
+          fi
 
       - name: Run bot
         env:
-          TG_TOKEN: ${{ secrets.TG_TOKEN }}
-          TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
-          TG_PASSWORD: ${{ secrets.TG_PASSWORD }}
-        run: python3 vpt_bot_github/vpt_bot.py send
+          BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
+        run: python bot.py
 
-      - name: Save state
-        if: always()
+      - name: Save database
         run: |
           git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add -A
-          git diff --cached --quiet || (git commit -m "state update [skip ci]" && git push)
-
-  poll:
-    if: github.event.schedule == '10 * * * *' || inputs.job == 'poll'
-    runs-on: ubuntu-latest
-    steps:
-      - name: Download repository
-        uses: actions/checkout@v4
-
-      - name: Setup Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-
-      - name: Install dependencies
-        run: pip install -r requirements.txt
-
-      - name: Run bot
-        env:
-          TG_TOKEN: ${{ secrets.TG_TOKEN }}
-          TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
-          TG_PASSWORD: ${{ secrets.TG_PASSWORD }}
-        run: python3 vpt_bot_github/vpt_bot.py poll
-
-      - name: Save state
-        if: always()
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add -A
-          git diff --cached --quiet || (git commit -m "state update [skip ci]" && git push)
-
-  watch:
-    if: github.event.schedule == '5/30 10-19 * * *' || inputs.job == 'watch'
-    runs-on: ubuntu-latest
-    steps:
-      - name: Download repository
-        uses: actions/checkout@v4
-
-      - name: Setup Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-
-      - name: Install dependencies
-        run: pip install -r requirements.txt
-
-      - name: Run bot
-        env:
-          TG_TOKEN: ${{ secrets.TG_TOKEN }}
-          TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
-          TG_PASSWORD: ${{ secrets.TG_PASSWORD }}
-        run: python3 vpt_bot_github/vpt_bot.py watch
-
-      - name: Save state
-        if: always()
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add -A
-          git diff --cached --quiet || (git commit -m "state update [skip ci]" && git push)
-
-  track:
-    if: github.event.schedule == '0 */5 * * *' || inputs.job == 'track'
-    runs-on: ubuntu-latest
-    steps:
-      - name: Download repository
-        uses: actions/checkout@v4
-
-      - name: Setup Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-
-      - name: Install dependencies
-        run: pip install -r requirements.txt
-
-      - name: Run bot
-        env:
-          TG_TOKEN: ${{ secrets.TG_TOKEN }}
-          TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
-          TG_PASSWORD: ${{ secrets.TG_PASSWORD }}
-        run: python3 vpt_bot_github/vpt_bot.py track
-
-      - name: Save state
-        if: always()
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add -A
-          git diff --cached --quiet || (git commit -m "state update [skip ci]" && git push)
-
-  test:
-    if: inputs.job == 'test'
-    runs-on: ubuntu-latest
-    steps:
-      - name: Download repository
-        uses: actions/checkout@v4
-
-      - name: Setup Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-
-      - name: Install dependencies
-        run: pip install -r requirements.txt
-
-      - name: Run test
-        env:
-          TG_TOKEN: ${{ secrets.TG_TOKEN }}
-          TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
-          TG_PASSWORD: ${{ secrets.TG_PASSWORD }}
-        run: python3 vpt_bot_github/vpt_bot.py test
+          git config user.email "41898282+github-actions[bot]@://github.com"
+          git add data/bot.db
+          git diff --cached --quiet || git commit -m "Update bot database"
+          git push
