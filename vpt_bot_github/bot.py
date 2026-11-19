@@ -1627,23 +1627,17 @@ def handle_message(token, chat_id, msg):
     # ── ожидание трек-номера после /3 ──
     if st.get("pending_track", {}).get(cs) and not low.startswith("/"):
         st.setdefault("pending_track", {}).pop(cs, None)
-        save_state(st)
         handle_track_number(token, chat, extract_track_arg(text) or text)
         return
 
     # счётчик команд
-        # счётчик команд
     stats = st.setdefault("stats", {})
     stats["cmd"] = stats.get("cmd", 0) + 1
     save_state(st)
 
-      stats = st.setdefault("stats", {})
-    stats["cmd"] = stats.get("cmd", 0) + 1
-    save_state(st)
-
-
     # ── меню-разделы ──
     if low.startswith("menu:sched"):
+
         send_schedule_menu(token, chat)
         return
     if low.startswith("menu:ai"):
